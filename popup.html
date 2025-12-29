@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Storage Sync</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header>
+      <div class="logo">
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><polyline points="1 20 1 14 7 14"></polyline><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path></svg>
+        <span>LocalStorage Sync</span>
+      </div>
+      <div id="user-status" class="status-indicator"></div>
+    </header>
+
+    <!-- Loading View -->
+    <div id="loading-view" class="view">
+      <div class="spinner"></div>
+      <p>Connecting to Drive...</p>
+    </div>
+
+    <!-- Login View -->
+    <div id="login-view" class="view hidden">
+      <p>Sync your local storage securely with your Google Drive.</p>
+      <button id="login-btn" class="primary-btn">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path fill="currentColor" d="M12.48 10.92v3.28h7.84c-.24 1.84-.853 3.187-1.787 4.133-1.147 1.147-2.933 2.4-6.053 2.4-4.827 0-8.6-3.893-8.6-8.72s3.773-8.72 8.6-8.72c2.6 0 4.507 1.027 5.907 2.347l2.307-2.307C18.747 1.44 16.133 0 12.48 0 5.867 0 .307 5.387.307 12s5.56 12 12.173 12c3.573 0 6.267-1.173 8.373-3.36 2.16-2.16 2.84-5.213 2.84-7.667 0-.76-.053-1.467-.173-2.053H12.48z"/></svg>
+        Sign in with Google
+      </button>
+    </div>
+
+    <!-- Main List View -->
+    <div id="list-view" class="view hidden">
+      <!-- Current Site Status Section -->
+      <div id="current-site-section" class="card">
+        <div class="card-header">
+          <span class="label">Current Site</span>
+          <span id="current-hostname" class="hostname">example.com</span>
+        </div>
+        <div class="card-actions">
+          <button id="add-current-btn" class="secondary-btn small-btn hidden">+ Add to Sync</button>
+          <div id="current-site-synced-badge" class="badge success hidden">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"></polyline></svg>
+            Synced
+          </div>
+          <div id="current-site-disabled-badge" class="badge neutral hidden">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+            Paused
+          </div>
+          <button id="config-current-btn" class="icon-btn hidden">
+             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
+        </div>
+      </div>
+
+      <h3 class="section-title">Synced Sites</h3>
+      <div id="sites-list" class="list-container">
+        <!-- Site items populated via JS -->
+      </div>
+      <div id="empty-state" class="empty-state hidden">
+        No synced sites found.
+      </div>
+    </div>
+
+    <!-- Detail/Config View -->
+    <div id="detail-view" class="view hidden">
+      <div class="nav-header">
+        <button id="back-btn" class="icon-btn">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+        </button>
+        <span id="detail-hostname">example.com</span>
+      </div>
+
+      <div class="sync-toggle-row">
+        <span>Enable Sync</span>
+        <label class="switch">
+          <input type="checkbox" id="site-master-toggle">
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="keys-list-header">
+        <span>LocalStorage Keys</span>
+        <span class="subtext">Synced from Cloud</span>
+      </div>
+
+      <div id="keys-list" class="keys-container">
+        <!-- Keys populated via JS -->
+      </div>
+
+      <div class="detail-actions">
+        <button id="delete-site-btn" class="danger-btn-outline">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+          Remove Site
+        </button>
+      </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="conflict-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3 class="warning">Sync Conflict Detected</h3>
+        <p>There is already synced data for <b id="conflict-domain"></b>.</p>
+        <p>Do you want to overwrite remote data with your local data, or use the existing remote data?</p>
+        <div class="modal-buttons">
+          <button id="conflict-use-local" class="secondary-btn">Overwrite (Use Local)</button>
+          <button id="conflict-use-remote" class="primary-btn">Use Synced Data</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="delete-modal" class="modal hidden">
+      <div class="modal-content">
+        <h3>Are you sure?</h3>
+        <p>You can remove this site from this browser only, or delete the synced data from your Google Drive entirely.</p>
+        <div class="modal-buttons vertical">
+          <button id="delete-browser-only" class="secondary-btn">Remove from Browser Only</button>
+          <button id="delete-remote-data" class="danger-btn">Delete Synced Data (All Devices)</button>
+          <button id="delete-cancel" class="text-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
