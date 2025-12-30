@@ -34,8 +34,24 @@ const els = {
   inspectorModal: document.getElementById('inspector-modal'),
   conflictMessage: document.getElementById('conflict-message'),
   conflictDomain: document.getElementById('conflict-domain'),
-  conflictCloseBtn: document.getElementById('conflict-close-btn') // Added close btn
+  conflictCloseBtn: document.getElementById('conflict-close-btn')
 };
+
+// --- Helpers for New Data Structure ---
+
+function unwrapValue(item) {
+    if (item && typeof item === 'object' && 'value' in item) {
+        return item.value;
+    }
+    return item;
+}
+
+function getTimestampStr(item) {
+    if (item && typeof item === 'object' && 'ts' in item) {
+        return new Date(item.ts).toLocaleString();
+    }
+    return 'Legacy (No TS)';
+}
 
 // --- Logger Helper ---
 function logToTab(msg, ...args) {
@@ -270,7 +286,8 @@ function renderKeyList(allKeys, localData, remoteData, config) {
   allKeys.forEach(key => {
     const isSynced = config.keys && config.keys[key] === true;
     const localVal = localData[key];
-    const remoteVal = remoteData[key];
+    const remoteValWrapper = remoteData[key]; 
+    const remoteVal = unwrapValue(remoteValWrapper); // Unwrap for display logic
     
     const row = document.createElement('div');
     row.className = 'key-item';
@@ -296,7 +313,7 @@ function renderKeyList(allKeys, localData, remoteData, config) {
     const inspectBtn = row.querySelector('.inspector-btn');
 
     inspectBtn.onclick = () => {
-        showInspector(key, localVal, remoteVal);
+        showInspector(key, localVal, remoteValWrapper); // Pass wrapper to inspector to see TS
     };
 
     checkbox.onchange = async () => {
@@ -304,10 +321,12 @@ function renderKeyList(allKeys, localData, remoteData, config) {
         
         if (checkbox.checked) {
             // Enabling Sync
-            // Strict Conflict Check: Always prompt if remote exists
+            
+            // STRICT CONFLICT CHECK:
+            // ALWAYS PROMPT if remote exists
             if (remoteVal !== undefined) {
                  logToTab("Remote data exists for this key. Prompting.");
-                 promptConflict(els.detailHostname.textContent, key, localVal, remoteVal, checkbox);
+                 promptConflict(els.detailHostname.textContent, key, localVal, remoteValWrapper, checkbox);
                  return;
             }
             
@@ -327,7 +346,7 @@ function renderKeyList(allKeys, localData, remoteData, config) {
   });
 }
 
-function showInspector(key, localVal, remoteVal) {
+function showInspector(key, localVal, remoteValWrapper) {
     els.inspectorModal.querySelector('.modal-title').textContent = key;
     
     // Safely format JSON or just show string
@@ -338,7 +357,16 @@ function showInspector(key, localVal, remoteVal) {
     };
 
     els.inspectorModal.querySelector('#inspect-local').textContent = safeFormat(localVal);
-    els.inspectorModal.querySelector('#inspect-remote').textContent = safeFormat(remoteVal);
+    
+    // Remote might be object with TS now
+    let remoteDisplay = 'null';
+    if(remoteValWrapper) {
+        const val = unwrapValue(remoteValWrapper);
+        const ts = getTimestampStr(remoteValWrapper);
+        remoteDisplay = `${safeFormat(val)}\n\n--- Metadata ---\nLast Modified: ${ts}`;
+    }
+    
+    els.inspectorModal.querySelector('#inspect-remote').textContent = remoteDisplay;
     els.inspectorModal.classList.remove('hidden');
 }
 
@@ -355,6 +383,13 @@ async function updateKeyConfig(domain, key, enabled) {
     if (!sites[domain].keys) sites[domain].keys = {};
     
     sites[domain].keys[key] = enabled;
+    
+    // Initialize shadow if enabling
+    if(enabled) {
+        if(!sites[domain].shadow) sites[domain].shadow = {};
+        // We don't have a value yet, so we don't set shadow
+        // The background script will see it as a fresh local edit on next sync
+    }
     
     syncedSites = sites; 
     await chrome.storage.local.set({ syncedSites: sites });
@@ -430,9 +465,11 @@ document.getElementById('conflict-use-remote').addEventListener('click', async (
     logToTab("Resolving conflict: USE REMOTE");
     if(!pendingConflict) return;
     const { domain, key, remoteVal, checkboxEl } = pendingConflict;
+    // remoteVal here comes from the wrapper passed in promptConflict
+    const valToInject = unwrapValue(remoteVal);
     
     await updateKeyConfig(domain, key, true);
-    await injectKeyToPage(key, remoteVal);
+    await injectKeyToPage(key, valToInject);
     chrome.tabs.reload(currentTab.id);
     
     checkboxEl.checked = true;

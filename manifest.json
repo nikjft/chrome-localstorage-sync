@@ -19,6 +19,13 @@
   "action": {
     "default_popup": "popup.html"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
   "oauth2": {
     "client_id": "18127381104-2epavjmhdadhfh8hbtn4lor1uh9di33b.apps.googleusercontent.com",
     "scopes": [

@@ -1,6 +1,7 @@
 // background.js - Handles Google Drive Auth & Sync Logic
 
 let authToken = null;
+let syncDebounceTimer = null;
 
 // --- Helper: Log to Active Tab ---
 // Injects logs into the active tab console for visibility
@@ -17,6 +18,31 @@ async function logToActiveTab(msg, ...args) {
             }
         }
     } catch(e) { /* Ignore logging errors */ }
+}
+
+// --- Helper: Data & Timestamp Management ---
+// Wraps raw data with a timestamp
+function wrapData(value, ts = Date.now()) {
+    // If it's already wrapped, don't double wrap unless structure is wrong
+    if (value && typeof value === 'object' && 'value' in value && 'ts' in value) {
+        return value;
+    }
+    return { value: value, ts: ts };
+}
+
+// Unwraps data, handling both legacy (raw string) and new (object) formats
+function unwrapValue(item) {
+    if (item && typeof item === 'object' && 'value' in item) {
+        return item.value;
+    }
+    return item;
+}
+
+function getTimestamp(item) {
+    if (item && typeof item === 'object' && 'ts' in item) {
+        return item.ts;
+    }
+    return 0; // Legacy data is treated as "old"
 }
 
 // --- Authentication ---
@@ -117,13 +143,14 @@ chrome.alarms.create('sync_check', { periodInMinutes: 1 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'sync_check') {
-    await performPeriodicSync();
+    await performPeriodicSync(false); // false = not triggered by user action
   }
 });
 
-async function performPeriodicSync() {
-  console.log("Running periodic sync...");
-  logToActiveTab("Running periodic sync...");
+async function performPeriodicSync(isTriggered = false) {
+  const mode = isTriggered ? "Triggered" : "Periodic";
+  console.log(`Running ${mode} sync...`);
+  if(isTriggered) logToActiveTab(`${mode} sync started...`);
   
   const tabs = await chrome.tabs.query({ active: true });
   
@@ -133,56 +160,136 @@ async function performPeriodicSync() {
     const url = new URL(tab.url);
     const domain = url.hostname;
     
+    // 1. Load Extension Storage (Config + Shadow)
     const storageData = await chrome.storage.local.get('syncedSites');
     const syncedSites = storageData.syncedSites || {};
     const config = syncedSites[domain];
     
     // Explicitly check for at least one active key
     if (config && config.keys && Object.values(config.keys).some(v => v === true)) {
+      // Ensure shadow storage exists
+      if (!config.shadow) config.shadow = {};
+
       try {
-        // 1. Fetch current local data from page
+        // 2. Fetch Live Page Data
         const localData = await chrome.scripting.executeScript({
           target: { tabId: tab.id },
           func: () => ({...localStorage})
         });
         
         if (!localData || !localData[0] || !localData[0].result) continue;
-        const currentLocal = localData[0].result;
+        const livePageData = localData[0].result;
+        let shadowUpdated = false;
+
+        // 3. Detect Local Changes (Update Shadow)
+        Object.keys(config.keys).forEach(key => {
+            if (config.keys[key] === true) {
+                const liveVal = livePageData[key];
+                const shadowVal = unwrapValue(config.shadow[key]);
+
+                // If live differs from shadow, User modified it recently.
+                // Update shadow with NEW timestamp.
+                // EXCEPTION: If liveVal is missing (undefined/null), user might have deleted it,
+                // OR it might be a fresh load where we want to restore.
+                // We SKIP updating shadow here if missing, so we can detect it as "missing" in Step 4.
+                if (liveVal !== shadowVal) {
+                    // Only update if liveVal is defined (avoid deleting if null temporarily)
+                    if(liveVal !== undefined && liveVal !== null) {
+                        config.shadow[key] = wrapData(liveVal, Date.now());
+                        shadowUpdated = true;
+                        console.log(`Local change detected for ${key}. Updated timestamp.`);
+                    }
+                }
+            }
+        });
+
+        // Save shadow updates immediately
+        if (shadowUpdated) {
+            syncedSites[domain] = config;
+            await chrome.storage.local.set({ syncedSites });
+        }
         
-        // 2. Fetch remote
+        // 4. Fetch Remote Cloud Data
         const files = await listSyncedFiles().catch(() => []);
         const file = files.find(f => f.name === domain + '.json');
         
         if (file) {
-           const remoteData = await getFileContent(file.id);
+           const remoteDataRaw = await getFileContent(file.id);
            let needsUpload = false;
-           let newData = { ...remoteData };
+           let newDataForCloud = { ...remoteDataRaw };
+           let injectDataRaw = {};
            let reloadNeeded = false;
-           let injectData = {};
            
-           // 3. Compare enabled keys - RULE: Local Edit overwrites Server
            Object.keys(config.keys).forEach(key => {
              if (config.keys[key] === true) {
-               // Only push if local exists and differs
-               if (currentLocal[key] !== undefined && currentLocal[key] !== remoteData[key]) {
-                 newData[key] = currentLocal[key];
-                 needsUpload = true;
-               } 
-               // Protection: Restore if local is missing but remote exists
-               else if (currentLocal[key] === undefined && remoteData[key] !== undefined) {
-                   injectData[key] = remoteData[key];
+               
+               const localObj = config.shadow[key]; // { value, ts }
+               const cloudObj = remoteDataRaw[key]; // { value, ts } or raw value
+               const liveVal = livePageData[key];
+
+               // RESTORE CHECK:
+               // If missing from page (liveVal undefined) AND exists in cloud -> Restore
+               // This fixes the "I deleted it, bring it back" scenario.
+               if ((liveVal === undefined || liveVal === null) && cloudObj) {
+                   injectDataRaw[key] = unwrapValue(cloudObj);
+                   // Update shadow to match cloud so we don't re-pull next time
+                   config.shadow[key] = wrapData(unwrapValue(cloudObj), getTimestamp(cloudObj));
+                   shadowUpdated = true;
                    reloadNeeded = true;
+                   console.log(`[SyncExt] Key ${key} missing locally. Restoring from cloud.`);
+                   return; // Done with this key
+               }
+
+               // Case A: Missing locally (Shadow missing), exists in cloud -> Pull
+               if (!localObj && cloudObj) {
+                   injectDataRaw[key] = unwrapValue(cloudObj);
+                   // Update shadow to match cloud so we don't re-pull next time
+                   config.shadow[key] = wrapData(unwrapValue(cloudObj), getTimestamp(cloudObj));
+                   shadowUpdated = true;
+                   reloadNeeded = true;
+                   return;
+               }
+
+               // Case B: Both exist -> Compare Timestamps
+               if (localObj) {
+                   const localTS = getTimestamp(localObj);
+                   const cloudTS = getTimestamp(cloudObj); // Returns 0 if cloudObj is missing or legacy
+
+                   if (localTS > cloudTS) {
+                       // Local is newer -> Push to Cloud
+                       // Only push if value is actually different to save bandwidth
+                       if (unwrapValue(localObj) !== unwrapValue(cloudObj)) {
+                           newDataForCloud[key] = localObj; // Push the whole object {value, ts}
+                           needsUpload = true;
+                           console.log(`Pushing newer local ${key} (TS: ${localTS}) > cloud (TS: ${cloudTS})`);
+                       }
+                   } else if (cloudTS > localTS) {
+                       // Cloud is newer -> Pull to Local
+                       if (unwrapValue(localObj) !== unwrapValue(cloudObj)) {
+                           injectDataRaw[key] = unwrapValue(cloudObj);
+                           // Update shadow to match accepted cloud state
+                           config.shadow[key] = cloudObj; 
+                           shadowUpdated = true;
+                           reloadNeeded = true;
+                           console.log(`Pulling newer cloud ${key} (TS: ${cloudTS}) > local (TS: ${localTS})`);
+                       }
+                   }
                }
              }
            });
            
            if (needsUpload) {
-             logToActiveTab("Uploading changes for", domain);
-             await uploadFile(domain + '.json', newData, file.id);
+             logToActiveTab("Uploading newer changes for", domain);
+             await uploadFile(domain + '.json', newDataForCloud, file.id);
            }
 
            if (reloadNeeded) {
-               logToActiveTab("Restoring missing local keys from cloud...");
+               logToActiveTab("Restoring newer keys from cloud...");
+               
+               // Save shadow changes before reload
+               syncedSites[domain] = config;
+               await chrome.storage.local.set({ syncedSites });
+
                await chrome.scripting.executeScript({
                     target: { tabId: tab.id },
                     func: (data) => {
@@ -192,9 +299,13 @@ async function performPeriodicSync() {
                             }
                         });
                     },
-                    args: [injectData]
+                    args: [injectDataRaw]
                });
                chrome.tabs.reload(tab.id);
+           } else if (shadowUpdated) {
+               // Save shadow changes if only internal state changed
+               syncedSites[domain] = config;
+               await chrome.storage.local.set({ syncedSites });
            }
         }
       } catch (e) {
@@ -213,7 +324,50 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
   
   if (request.action === 'force_sync_current_tab') {
-      performPeriodicSync().then(() => sendResponse({ success: true }));
+      performPeriodicSync(true).then(() => sendResponse({ success: true }));
+      return true;
+  }
+
+  // STARTUP DATA HANDLER
+  if (request.action === 'get_startup_data') {
+      chrome.storage.local.get('syncedSites').then((data) => {
+          const sites = data.syncedSites || {};
+          const config = sites[request.domain];
+          const result = {};
+          
+          if (config && config.keys && config.shadow) {
+              Object.keys(config.keys).forEach(key => {
+                  // Only send data if key is enabled AND data exists in shadow
+                  if (config.keys[key] === true && config.shadow[key]) {
+                      result[key] = unwrapValue(config.shadow[key]);
+                  }
+              });
+          }
+          sendResponse({ data: result });
+      });
+      return true; // Keep channel open for async response
+  }
+  
+  // NEW: Debounced Instant Sync Trigger
+  if (request.action === 'trigger_debounce_sync') {
+      const { domain, key } = request;
+      console.log(`[SyncExt Background] Trigger received for ${domain} key: ${key}`);
+      
+      chrome.storage.local.get('syncedSites').then((data) => {
+          const sites = data.syncedSites || {};
+          // Check if this specific key is enabled for sync
+          if (sites[domain] && sites[domain].keys && sites[domain].keys[key] === true) {
+              
+              if (syncDebounceTimer) clearTimeout(syncDebounceTimer);
+              
+              console.log(`[SyncExt Background] Change valid. Debouncing sync...`);
+              syncDebounceTimer = setTimeout(() => {
+                  console.log("[SyncExt Background] Debounce timer finished. Triggering sync.");
+                  performPeriodicSync(true); 
+                  syncDebounceTimer = null;
+              }, 2000); 
+          }
+      });
       return true;
   }
 
@@ -237,7 +391,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const existingFile = files.find(f => f.name === filename);
       
       try {
-        await uploadFile(filename, request.data, existingFile ? existingFile.id : null);
+        // When popup manually syncs, we assume that is the "truth".
+        // We wrap it in a new timestamp.
+        const payload = {};
+        Object.keys(request.data).forEach(k => {
+            payload[k] = wrapData(unwrapValue(request.data[k]), Date.now());
+        });
+
+        await uploadFile(filename, payload, existingFile ? existingFile.id : null);
+        
+        // Also update local shadow to prevent immediate overwrites
+        const domain = request.domain;
+        const d = await chrome.storage.local.get('syncedSites');
+        const s = d.syncedSites || {};
+        if(s[domain]) {
+            if(!s[domain].shadow) s[domain].shadow = {};
+            Object.keys(payload).forEach(k => {
+                s[domain].shadow[k] = payload[k];
+            });
+            await chrome.storage.local.set({ syncedSites: s });
+        }
+
         sendResponse({ success: true });
       } catch (err) {
         sendResponse({ error: err.message });
@@ -258,61 +432,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('http')) {
-    const url = new URL(tab.url);
-    const domain = url.hostname;
-
-    const storageData = await chrome.storage.local.get('syncedSites');
-    const syncedSites = storageData.syncedSites || {};
-    const config = syncedSites[domain];
-
-    // RULE: On Load -> Load Server Data (if key enabled)
-    if (config && config.keys && Object.values(config.keys).some(v => v === true)) {
-      console.log(`Auto-syncing detected for ${domain}`);
-      
-      const files = await listSyncedFiles().catch(() => []);
-      const file = files.find(f => f.name === domain + '.json');
-      
-      if (file) {
-        try {
-            const remoteData = await getFileContent(file.id);
-            
-            const dataToInject = {};
-            Object.keys(config.keys).forEach(key => {
-                // Strict check: Key must be explicitly checked in config
-                if (config.keys[key] === true && remoteData.hasOwnProperty(key)) {
-                    dataToInject[key] = remoteData[key];
-                }
-            });
-
-            if (Object.keys(dataToInject).length > 0) {
-                chrome.scripting.executeScript({
-                    target: { tabId: tabId },
-                    func: (data) => {
-                        let changed = false;
-                        Object.keys(data).forEach(key => {
-                            // Fix: Don't inject undefined/null blindly, check if it matters
-                            if (data[key] !== undefined && data[key] !== null) {
-                                if (localStorage.getItem(key) !== data[key]) {
-                                    console.log("Overwriting key:", key);
-                                    localStorage.setItem(key, data[key]);
-                                    changed = true;
-                                }
-                            }
-                        });
-                        return changed;
-                    },
-                    args: [dataToInject]
-                }, (results) => {
-                    if (results && results[0] && results[0].result === true) {
-                        logToActiveTab("Data injected from cloud, reloading page...");
-                        chrome.tabs.reload(tabId);
-                    }
-                });
-            }
-        } catch (e) {
-            console.warn("Sync failed (likely auth):", e);
-        }
-      }
-    }
+    // Re-run the main sync logic on load.
+    // This allows the timestamp check to happen immediately.
+    performPeriodicSync(); 
   }
 });
