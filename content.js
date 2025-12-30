@@ -1,14 +1,15 @@
 // content.js - Helper to read/write localStorage
 
-// Listen for requests from Popup
+// We can add a listener here if we want to push changes proactively, 
+// but for now relying on the 1-minute alarm in background.js is safer 
+// to avoid "chatty" network calls.
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "get_all_storage") {
-    // Send all localStorage back
     sendResponse({ data: { ...localStorage } });
   }
   
   if (request.action === "set_storage_items") {
-    // Update specific keys
     const items = request.items;
     let count = 0;
     Object.keys(items).forEach(key => {

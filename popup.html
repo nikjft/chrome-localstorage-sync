@@ -20,7 +20,7 @@
     <!-- Loading View -->
     <div id="loading-view" class="view">
       <div class="spinner"></div>
-      <p>Connecting to Drive...</p>
+      <p>Connecting...</p>
     </div>
 
     <!-- Login View -->
@@ -57,12 +57,8 @@
       </div>
 
       <h3 class="section-title">Synced Sites</h3>
-      <div id="sites-list" class="list-container">
-        <!-- Site items populated via JS -->
-      </div>
-      <div id="empty-state" class="empty-state hidden">
-        No synced sites found.
-      </div>
+      <div id="sites-list" class="list-container"></div>
+      <div id="empty-state" class="empty-state hidden">No synced sites.</div>
     </div>
 
     <!-- Detail/Config View -->
@@ -74,22 +70,12 @@
         <span id="detail-hostname">example.com</span>
       </div>
 
-      <div class="sync-toggle-row">
-        <span>Enable Sync</span>
-        <label class="switch">
-          <input type="checkbox" id="site-master-toggle">
-          <span class="slider round"></span>
-        </label>
-      </div>
-
       <div class="keys-list-header">
-        <span>LocalStorage Keys</span>
-        <span class="subtext">Synced from Cloud</span>
+        <span>Sync Keys</span>
+        <span class="subtext">Check box to sync</span>
       </div>
 
-      <div id="keys-list" class="keys-container">
-        <!-- Keys populated via JS -->
-      </div>
+      <div id="keys-list" class="keys-container"></div>
 
       <div class="detail-actions">
         <button id="delete-site-btn" class="danger-btn-outline">
@@ -101,13 +87,17 @@
 
     <!-- Modals -->
     <div id="conflict-modal" class="modal hidden">
-      <div class="modal-content">
-        <h3 class="warning">Sync Conflict Detected</h3>
-        <p>There is already synced data for <b id="conflict-domain"></b>.</p>
-        <p>Do you want to overwrite remote data with your local data, or use the existing remote data?</p>
+      <div class="modal-content" style="position: relative;">
+        <!-- Close (Cancel) Button -->
+        <button id="conflict-close-btn" class="icon-btn" style="position: absolute; top: 10px; right: 10px;" title="Cancel">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+        <h3 class="warning">Sync Conflict</h3>
+        <p style="margin-bottom: 5px;">Conflict on: <span id="conflict-domain" style="font-weight: 600;"></span></p>
+        <p id="conflict-message">Values differ for this key.</p>
         <div class="modal-buttons">
-          <button id="conflict-use-local" class="secondary-btn">Overwrite (Use Local)</button>
-          <button id="conflict-use-remote" class="primary-btn">Use Synced Data</button>
+          <button id="conflict-use-local" class="secondary-btn">Use Local (Browser)</button>
+          <button id="conflict-use-remote" class="primary-btn">Use Synced (Cloud)</button>
         </div>
       </div>
     </div>
@@ -115,13 +105,33 @@
     <div id="delete-modal" class="modal hidden">
       <div class="modal-content">
         <h3>Are you sure?</h3>
-        <p>You can remove this site from this browser only, or delete the synced data from your Google Drive entirely.</p>
+        <p>Remove sync config from this browser or delete all synced data?</p>
         <div class="modal-buttons vertical">
           <button id="delete-browser-only" class="secondary-btn">Remove from Browser Only</button>
-          <button id="delete-remote-data" class="danger-btn">Delete Synced Data (All Devices)</button>
+          <button id="delete-remote-data" class="danger-btn">Delete Synced Data</button>
           <button id="delete-cancel" class="text-btn">Cancel</button>
         </div>
       </div>
+    </div>
+
+    <!-- Inspector Modal -->
+    <div id="inspector-modal" class="modal hidden">
+        <div class="modal-content" style="width:90%; max-height:80vh; display:flex; flex-direction:column; text-align:left;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <h3 class="modal-title" style="margin:0;">Key Inspector</h3>
+                <button id="inspector-close" class="icon-btn">X</button>
+            </div>
+            <div style="overflow-y:auto; flex:1; font-family:monospace; font-size:11px;">
+                <div style="margin-bottom:10px;">
+                    <strong>Local (Browser):</strong>
+                    <pre id="inspect-local" style="background:#f1f3f4; padding:8px; border-radius:4px; overflow-x:auto;"></pre>
+                </div>
+                <div>
+                    <strong>Remote (Cloud):</strong>
+                    <pre id="inspect-remote" style="background:#e8f0fe; padding:8px; border-radius:4px; overflow-x:auto;"></pre>
+                </div>
+            </div>
+        </div>
     </div>
 
   </div>
